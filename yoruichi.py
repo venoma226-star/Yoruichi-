@@ -4,8 +4,22 @@ from nextcord import Interaction
 from nextcord.ui import View, Button
 import wavelink
 import os
+from flask import Flask
+import threading
 
-# ---------- Setup ----------
+# ---------- Flask web server to satisfy Render ----------
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "Yoruichi Bot is alive!"
+
+def run():
+    app.run(host="0.0.0.0", port=8080)
+
+threading.Thread(target=run).start()
+
+# ---------- Bot Setup ----------
 intents = nextcord.Intents.all()
 bot = commands.Bot(command_prefix="/", intents=intents)
 
@@ -35,8 +49,7 @@ async def on_ready():
         bot.lavalink_node = wavelink.Node(
             uri=f"http://{LAVALINK_HOST}:{LAVALINK_PORT}",
             password=LAVALINK_PASSWORD,
-            identifier="MAIN",
-            region="us_central"
+            identifier="MAIN"
         )
         await bot.lavalink_node.connect()
 
