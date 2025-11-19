@@ -2,3 +2,4 @@ nextcord
 nextcord[voice]
 wavelink
 youtube-dl
+Flask
