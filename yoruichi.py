@@ -60,8 +60,16 @@ def set_vc_channel_id(cid):
 @bot.event
 async def on_ready():
     print(f"[READY] {bot.user} ({bot.user.id})")
-    if not wavelink.NodePool.nodes:
-        await wavelink.NodePool.create_node(
+
+    # Check if node exists
+    try:
+        node = wavelink.get_node()
+    except KeyError:
+        node = None
+
+    # Create node if none exists
+    if not node:
+        await wavelink.Node(
             bot=bot,
             host=LAVALINK_HOST,
             port=LAVALINK_PORT,
@@ -71,7 +79,7 @@ async def on_ready():
         )
     print("[Wavelink] Node ready.")
 
-    # ------------------ Auto-join 24/7 VC ------------------
+    # Auto-join 24/7 VC
     vc_id = get_vc_channel_id()
     if vc_id:
         channel = bot.get_channel(vc_id)
@@ -83,11 +91,16 @@ async def on_ready():
 
 # ---------- PLAYER ----------
 async def get_player(guild: nextcord.Guild, vc_channel_id: Optional[int] = None):
-    node = next(iter(wavelink.NodePool.nodes.values()))
+    try:
+        node = wavelink.get_node()
+    except KeyError:
+        return None
+
     try:
         player = node.get_player(guild.id)
     except Exception:
         player = wavelink.Player(bot=bot, guild_id=guild.id)
+
     if not player.is_connected():
         target_vc = vc_channel_id or get_vc_channel_id()
         if not target_vc:
@@ -96,6 +109,7 @@ async def get_player(guild: nextcord.Guild, vc_channel_id: Optional[int] = None)
         if not channel:
             return None
         await player.connect(channel.id)
+
     if not hasattr(player, "queue"):
         player.queue = []
     if not hasattr(player, "loop"):
@@ -231,9 +245,6 @@ async def shuffle(inter: Interaction):
 # ---------- AUTOPLAY NEXT ----------
 @bot.event
 async def on_wavelink_track_end(player: wavelink.Player, track, reason):
-    """
-    track is untyped because Wavelink 3.x has no wavelink.Track
-    """
     # Loop current song
     if getattr(player, "loop", False) == "song":
         await player.play(track)
@@ -246,7 +257,6 @@ async def on_wavelink_track_end(player: wavelink.Player, track, reason):
 
     if next_track:
         await player.play(next_track)
-        # Update embed in VC channel
         try:
             channel = bot.get_channel(player.channel_id)
             if channel:
@@ -259,13 +269,11 @@ async def on_wavelink_track_end(player: wavelink.Player, track, reason):
                 await channel.send(embed=embed, view=MusicControls(player))
         except Exception:
             pass
-    # Loop queue mode
     elif getattr(player, "loop", False) == "queue":
         if hasattr(player, "queue") and track:
             player.queue.append(track)
             next_track = player.queue.pop(0)
             await player.play(next_track)
-    # Disconnect if nothing left
     else:
         await player.disconnect()
 
