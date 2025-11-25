@@ -1,15 +1,16 @@
 import os
 import json
 import random
+import asyncio
 import threading
-from typing import Optional
 
 import nextcord
 from nextcord import Interaction
 from nextcord.ext import commands
 from nextcord.ui import View
-import wavelink
 from flask import Flask
+
+import yt_dlp
 
 # ---------- FLASK KEEP-ALIVE ----------
 app = Flask("")
@@ -28,7 +29,7 @@ def load_config():
         with open(CONFIG_FILE, "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        cfg = {"vc_channel_id": None, "stay_24_7": True}
+        cfg = {"vc_channel_id": None, "stay_24_7": True, "queue": [], "loop": False}
         save_config(cfg)
         return cfg
 
@@ -42,10 +43,6 @@ cfg = load_config()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "1355140133661184221"))
 OWNER_ROLE_ID = int(os.getenv("OWNER_ROLE_ID", 1436411629741801482))
-
-LAVALINK_HOST = os.getenv("LAVALINK_HOST", "lavalink.dev")
-LAVALINK_PORT = int(os.getenv("LAVALINK_PORT", 2333))
-LAVALINK_PASSWORD = os.getenv("LAVALINK_PASSWORD", "youshallnotpass")
 
 intents = nextcord.Intents.all()
 bot = commands.Bot(command_prefix="/", intents=intents)
@@ -68,56 +65,64 @@ def set_vc_channel_id(cid):
     cfg["vc_channel_id"] = cid
     save_config(cfg)
 
-# ---------- WAVELINK NODE & PLAYER ----------
-async def ensure_node():
-    if not wavelink.NodePool.nodes:
-        await wavelink.NodePool.create_node(
-            bot=bot,
-            host=LAVALINK_HOST,
-            port=LAVALINK_PORT,
-            password=LAVALINK_PASSWORD,
-            https=False,
-            identifier="MAIN"
-        )
+async def get_voice_client(guild: nextcord.Guild, channel_id=None):
+    channel_id = channel_id or get_vc_channel_id()
+    if not channel_id:
+        return None
+    channel = guild.get_channel(channel_id)
+    if not channel:
+        return None
+    if guild.voice_client:
+        return guild.voice_client
+    return await channel.connect()
 
-async def get_player(guild: nextcord.Guild, vc_channel_id: Optional[int] = None):
-    await ensure_node()
-    node = next(iter(wavelink.NodePool.nodes.values()))
-    try:
-        player = node.get_player(guild.id)
-    except Exception:
-        player = wavelink.Player(bot=bot, guild_id=guild.id)
+# ---------- MUSIC QUEUE ----------
+cfg["queue"] = cfg.get("queue", [])
+cfg["loop"] = cfg.get("loop", False)
 
-    if not player.is_connected():
-        target_vc = vc_channel_id or get_vc_channel_id()
-        if not target_vc:
-            return None
-        channel = bot.get_channel(target_vc)
-        if not channel:
-            return None
-        await player.connect(channel.id)
+async def play_next(vc: nextcord.VoiceClient):
+    if not cfg["queue"]:
+        return
 
-    if not hasattr(player, "queue"):
-        player.queue = []
-    if not hasattr(player, "loop"):
-        player.loop = False
-    if not hasattr(player, "volume"):
-        player.volume = 100
-    return player
+    query = cfg["queue"][0]
 
-# ---------- ON READY ----------
-@bot.event
-async def on_ready():
-    print(f"[READY] {bot.user} ({bot.user.id})")
-    # Auto-join 24/7 VC
-    vc_id = get_vc_channel_id()
-    if vc_id:
-        channel = bot.get_channel(vc_id)
+    # yt_dlp options
+    ydl_opts = {
+        "format": "bestaudio",
+        "quiet": True,
+        "noplaylist": True,
+    }
+
+    # Search if query is not a URL
+    if not query.startswith("http"):
+        query = f"ytsearch1:{query}"
+
+    def run_yt():
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(query, download=False)
+            url = info["entries"][0]["url"] if "entries" in info else info["url"]
+            title = info["entries"][0]["title"] if "entries" in info else info.get("title", "Unknown")
+            return url, title
+
+    audio_url, title = await asyncio.to_thread(run_yt)
+
+    vc.play(nextcord.FFmpegPCMAudio(audio_url, options="-vn"), after=lambda e: asyncio.run_coroutine_threadsafe(after_play(vc), bot.loop))
+
+    embed = nextcord.Embed(title="Now Playing", description=f"**{title}**", color=0x00ff88)
+    return embed
+
+async def after_play(vc: nextcord.VoiceClient):
+    if cfg["loop"] and cfg["queue"]:
+        # Move the first track to the end if loop queue
+        cfg["queue"].append(cfg["queue"].pop(0))
+    else:
+        if cfg["queue"]:
+            cfg["queue"].pop(0)
+    if cfg["queue"]:
+        embed = await play_next(vc)
+        channel = vc.channel
         if channel:
-            player = await get_player(channel.guild, vc_id)
-            if player and not player.is_connected():
-                await player.connect(channel.id)
-                print(f"[24/7] Reconnected to {channel.name}")
+            await channel.send(embed=embed, view=MusicControls(vc))
 
 # ---------- AUTORESPONDER ----------
 @bot.event
@@ -130,136 +135,79 @@ async def on_message(message):
 
 # ---------- MUSIC CONTROLS ----------
 class MusicControls(View):
-    def __init__(self, player):
+    def __init__(self, vc):
         super().__init__(timeout=None)
-        self.player = player
-
-    @nextcord.ui.button(label="▶ Resume", style=nextcord.ButtonStyle.success)
-    async def resume(self, b, inter: Interaction):
-        await self.player.resume()
-        await inter.response.send_message("▶ Resumed", ephemeral=True)
+        self.vc = vc
 
     @nextcord.ui.button(label="⏸ Pause", style=nextcord.ButtonStyle.primary)
     async def pause(self, b, inter: Interaction):
-        await self.player.pause()
-        await inter.response.send_message("⏸ Paused", ephemeral=True)
+        if self.vc.is_playing():
+            self.vc.pause()
+            await inter.response.send_message("⏸ Paused", ephemeral=True)
+
+    @nextcord.ui.button(label="▶ Resume", style=nextcord.ButtonStyle.success)
+    async def resume(self, b, inter: Interaction):
+        if self.vc.is_paused():
+            self.vc.resume()
+            await inter.response.send_message("▶ Resumed", ephemeral=True)
 
     @nextcord.ui.button(label="⏭ Skip", style=nextcord.ButtonStyle.secondary)
     async def skip(self, b, inter: Interaction):
-        await self.player.stop()
+        self.vc.stop()
         await inter.response.send_message("⏭ Skipped", ephemeral=True)
 
-    @nextcord.ui.button(label="⏹ Stop", style=nextcord.ButtonStyle.danger)
-    async def stop(self, b, inter: Interaction):
-        if not has_owner_role(inter):
-            await inter.response.send_message("❌ You can't stop", ephemeral=True)
-            return
-        await self.player.disconnect()
-        await inter.response.send_message("Stopped & disconnected", ephemeral=True)
-
-    @nextcord.ui.button(label="🔁 Loop Song", style=nextcord.ButtonStyle.success)
-    async def loop_song(self, b, inter: Interaction):
-        self.player.loop = "song"
-        await inter.response.send_message("Loop mode: Song 🔁", ephemeral=True)
-
-    @nextcord.ui.button(label="🔁🔁 Loop Queue", style=nextcord.ButtonStyle.success)
+    @nextcord.ui.button(label="🔁 Loop Queue", style=nextcord.ButtonStyle.success)
     async def loop_queue(self, b, inter: Interaction):
-        self.player.loop = "queue"
-        await inter.response.send_message("Loop mode: Queue 🔁🔁", ephemeral=True)
-
-    @nextcord.ui.button(label="🚫 Disable Loop", style=nextcord.ButtonStyle.secondary)
-    async def loop_off(self, b, inter: Interaction):
-        self.player.loop = False
-        await inter.response.send_message("Loop disabled 🚫", ephemeral=True)
+        cfg["loop"] = not cfg["loop"]
+        await inter.response.send_message(f"Loop is now {cfg['loop']}", ephemeral=True)
 
 # ---------- SLASH COMMANDS ----------
 @bot.slash_command(description="Set VC for 24/7 music")
 async def setchannel(inter: Interaction, channel: nextcord.VoiceChannel):
-    await inter.response.defer(ephemeral=True)
     if not require_owner(inter):
-        return await inter.followup.send("❌ Owner-role required", ephemeral=True)
+        return await inter.response.send_message("❌ Owner-role required", ephemeral=True)
     set_vc_channel_id(channel.id)
-    await get_player(inter.guild, channel.id)
-    await inter.followup.send(f"VC set to {channel.name} ✅", ephemeral=False)
+    await get_voice_client(inter.guild, channel.id)
+    await inter.response.send_message(f"VC set to {channel.name} ✅")
 
-@bot.slash_command(description="Remove VC and disconnect")
+@bot.slash_command(description="Remove VC")
 async def removevc(inter: Interaction):
-    await inter.response.defer(ephemeral=True)
     if not require_owner(inter):
-        return await inter.followup.send("❌ Owner-role required", ephemeral=True)
-    player = await get_player(inter.guild)
-    if player and player.is_connected():
-        await player.disconnect()
+        return await inter.response.send_message("❌ Owner-role required", ephemeral=True)
+    vc = inter.guild.voice_client
+    if vc:
+        await vc.disconnect()
     set_vc_channel_id(None)
-    await inter.followup.send("Removed 24/7 VC", ephemeral=False)
+    await inter.response.send_message("Removed VC", ephemeral=False)
 
 @bot.slash_command(description="Play song (search or link)")
 async def play(inter: Interaction, query: str):
     await inter.response.defer()
-    player = await get_player(inter.guild)
-    if not player:
-        return await inter.followup.send("VC not set or player error.", ephemeral=True)
+    vc = await get_voice_client(inter.guild)
+    if not vc:
+        return await inter.followup.send("VC not set or bot not connected", ephemeral=True)
 
-    try:
-        track = await wavelink.YouTubeTrack.search(query, return_first=True)
-    except Exception as e:
-        return await inter.followup.send(f"Search failed: {e}", ephemeral=True)
+    # Add to queue
+    cfg["queue"].append(query)
 
-    if player.is_playing() or player.is_paused():
-        player.queue.append(track)
-        return await inter.followup.send(f"Queued: {track.title}")
+    # If nothing is playing, start playback
+    if not vc.is_playing() and not vc.is_paused():
+        embed = await play_next(vc)
+        await inter.followup.send(embed=embed, view=MusicControls(vc))
     else:
-        await player.play(track)
-        embed = nextcord.Embed(title="Now Playing", description=f"**{track.title}**", color=0x00ff88)
-        embed.set_footer(text=f"Requested by {inter.user.display_name}")
-        await inter.followup.send(embed=embed, view=MusicControls(player))
+        await inter.followup.send(f"Added to queue: {query}")
 
-# ---------- QUEUE ----------
 @bot.slash_command(description="Show queue")
 async def queue(inter: Interaction):
-    player = await get_player(inter.guild)
-    if not player or not player.queue:
+    if not cfg["queue"]:
         return await inter.response.send_message("Queue is empty", ephemeral=True)
-    desc = "\n".join([f"{i+1}. {t.title}" for i, t in enumerate(player.queue)])
+    desc = "\n".join([f"{i+1}. {t}" for i, t in enumerate(cfg["queue"])])
     await inter.response.send_message(f"**Queue:**\n{desc}")
 
 @bot.slash_command(description="Clear queue")
 async def clearqueue(inter: Interaction):
-    player = await get_player(inter.guild)
-    if player:
-        player.queue.clear()
-        await inter.response.send_message("🗑️ Queue cleared", ephemeral=False)
-
-# ---------- AUTOPLAY NEXT ----------
-@bot.event
-async def on_wavelink_track_end(player: wavelink.Player, track, reason):
-    # Loop current song
-    if getattr(player, "loop", False) == "song":
-        await player.play(track)
-        return
-
-    next_track = None
-    if hasattr(player, "queue") and player.queue:
-        next_track = player.queue.pop(0)
-
-    if next_track:
-        await player.play(next_track)
-        try:
-            channel = bot.get_channel(player.channel_id)
-            if channel:
-                embed = nextcord.Embed(title="Now Playing", description=f"**{next_track.title}**", color=0x00ff88)
-                embed.set_footer(text="Autoplayed from queue")
-                await channel.send(embed=embed, view=MusicControls(player))
-        except Exception:
-            pass
-    elif getattr(player, "loop", False) == "queue":
-        if hasattr(player, "queue") and track:
-            player.queue.append(track)
-            next_track = player.queue.pop(0)
-            await player.play(next_track)
-    else:
-        await player.disconnect()
+    cfg["queue"].clear()
+    await inter.response.send_message("🗑️ Queue cleared", ephemeral=False)
 
 # ---------- RUN ----------
-if __name__ == "__main__":
-    bot.run(DISCORD_TOKEN)
+bot.run(DISCORD_TOKEN)
