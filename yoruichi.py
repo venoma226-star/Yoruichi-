@@ -2,12 +2,27 @@ import os
 import json
 import random
 from typing import Optional
+import threading
 
 import nextcord
 from nextcord import Interaction
 from nextcord.ext import commands
 from nextcord.ui import View
 import wavelink
+from flask import Flask
+
+# ---------- FLASK KEEP-ALIVE ----------
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "Yoruichi Bot is alive!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run_flask).start()
 
 # ---------- CONFIG ----------
 CONFIG_FILE = "config.json"
@@ -32,7 +47,7 @@ OWNER_ID = int(os.getenv("OWNER_ID", "1355140133661184221"))
 OWNER_ROLE_ID = int(os.getenv("OWNER_ROLE_ID", 1436411629741801482))
 
 LAVALINK_HOST = os.getenv("LAVALINK_HOST", "lavalink.dev")
-LAVALINK_PORT = int(os.getenv("LAVALINK_PORT", 2333))
+LAVALINK_PORT = int(os.environ.get("LAVALINK_PORT", 2333))
 LAVALINK_PASSWORD = os.getenv("LAVALINK_PASSWORD", "youshallnotpass")
 
 intents = nextcord.Intents.all()
@@ -61,13 +76,12 @@ def set_vc_channel_id(cid):
 async def on_ready():
     print(f"[READY] {bot.user} ({bot.user.id})")
 
-    # Check if node exists
+    # Node creation
     try:
         node = wavelink.get_node()
     except KeyError:
         node = None
 
-    # Create node if none exists
     if not node:
         await wavelink.Node(
             bot=bot,
@@ -77,6 +91,7 @@ async def on_ready():
             https=False,
             identifier="MAIN"
         )
+
     print("[Wavelink] Node ready.")
 
     # Auto-join 24/7 VC
@@ -225,22 +240,6 @@ async def clearqueue(inter: Interaction):
     if player:
         player.queue.clear()
         await inter.response.send_message("🗑️ Queue cleared", ephemeral=False)
-
-@bot.slash_command(description="Remove a song from queue by position")
-async def remove(inter: Interaction, index: int):
-    player = await get_player(inter.guild)
-    if not player or not player.queue or index < 1 or index > len(player.queue):
-        return await inter.response.send_message("Invalid index", ephemeral=True)
-    track = player.queue.pop(index-1)
-    await inter.response.send_message(f"Removed: {track.title}", ephemeral=False)
-
-@bot.slash_command(description="Shuffle queue")
-async def shuffle(inter: Interaction):
-    player = await get_player(inter.guild)
-    if not player or not player.queue:
-        return await inter.response.send_message("Queue empty", ephemeral=True)
-    random.shuffle(player.queue)
-    await inter.response.send_message("Queue shuffled 🎲", ephemeral=False)
 
 # ---------- AUTOPLAY NEXT ----------
 @bot.event
