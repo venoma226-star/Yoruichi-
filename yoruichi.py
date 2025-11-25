@@ -86,17 +86,12 @@ async def play_next(vc: nextcord.VoiceClient):
 
     query = cfg["queue"][0]
 
-    # yt_dlp options
-    ydl_opts = {
-        "format": "bestaudio",
-        "quiet": True,
-        "noplaylist": True,
-    }
+    ydl_opts = {"format": "bestaudio", "quiet": True, "noplaylist": True}
 
-    # Search if query is not a URL
     if not query.startswith("http"):
         query = f"ytsearch1:{query}"
 
+    # Run yt_dlp in a background thread to prevent blocking
     def run_yt():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(query, download=False)
@@ -113,7 +108,7 @@ async def play_next(vc: nextcord.VoiceClient):
 
 async def after_play(vc: nextcord.VoiceClient):
     if cfg["loop"] and cfg["queue"]:
-        # Move the first track to the end if loop queue
+        # Move the first track to the end if looping queue
         cfg["queue"].append(cfg["queue"].pop(0))
     else:
         if cfg["queue"]:
@@ -167,7 +162,7 @@ async def setchannel(inter: Interaction, channel: nextcord.VoiceChannel):
     if not require_owner(inter):
         return await inter.response.send_message("❌ Owner-role required", ephemeral=True)
 
-    await inter.response.defer()  # defer immediately
+    await inter.response.defer()
 
     async def join_vc():
         set_vc_channel_id(channel.id)
@@ -195,10 +190,8 @@ async def play(inter: Interaction, query: str):
         if not vc:
             return await inter.followup.send("VC not set or bot not connected.", ephemeral=True)
 
-        # Add to queue
         cfg["queue"].append(query)
 
-        # If nothing is playing, start playback
         if not vc.is_playing() and not vc.is_paused():
             embed = await play_next(vc)
             await inter.followup.send(embed=embed, view=MusicControls(vc))
