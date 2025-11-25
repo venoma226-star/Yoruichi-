@@ -166,9 +166,15 @@ class MusicControls(View):
 async def setchannel(inter: Interaction, channel: nextcord.VoiceChannel):
     if not require_owner(inter):
         return await inter.response.send_message("❌ Owner-role required", ephemeral=True)
-    set_vc_channel_id(channel.id)
-    await get_voice_client(inter.guild, channel.id)
-    await inter.response.send_message(f"VC set to {channel.name} ✅")
+
+    await inter.response.defer()  # defer immediately
+
+    async def join_vc():
+        set_vc_channel_id(channel.id)
+        await get_voice_client(inter.guild, channel.id)
+        await inter.followup.send(f"VC set to {channel.name} ✅")
+
+    asyncio.create_task(join_vc())
 
 @bot.slash_command(description="Remove VC")
 async def removevc(inter: Interaction):
@@ -183,19 +189,23 @@ async def removevc(inter: Interaction):
 @bot.slash_command(description="Play song (search or link)")
 async def play(inter: Interaction, query: str):
     await inter.response.defer()
-    vc = await get_voice_client(inter.guild)
-    if not vc:
-        return await inter.followup.send("VC not set or bot not connected", ephemeral=True)
 
-    # Add to queue
-    cfg["queue"].append(query)
+    async def do_play():
+        vc = await get_voice_client(inter.guild)
+        if not vc:
+            return await inter.followup.send("VC not set or bot not connected.", ephemeral=True)
 
-    # If nothing is playing, start playback
-    if not vc.is_playing() and not vc.is_paused():
-        embed = await play_next(vc)
-        await inter.followup.send(embed=embed, view=MusicControls(vc))
-    else:
-        await inter.followup.send(f"Added to queue: {query}")
+        # Add to queue
+        cfg["queue"].append(query)
+
+        # If nothing is playing, start playback
+        if not vc.is_playing() and not vc.is_paused():
+            embed = await play_next(vc)
+            await inter.followup.send(embed=embed, view=MusicControls(vc))
+        else:
+            await inter.followup.send(f"Added to queue: {query}")
+
+    asyncio.create_task(do_play())
 
 @bot.slash_command(description="Show queue")
 async def queue(inter: Interaction):
