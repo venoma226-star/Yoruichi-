@@ -9,7 +9,6 @@ from nextcord import Interaction
 from nextcord.ext import commands
 from nextcord.ui import View
 from flask import Flask
-
 import yt_dlp
 
 # ---------- FLASK KEEP-ALIVE ----------
@@ -29,7 +28,7 @@ def load_config():
         with open(CONFIG_FILE, "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        cfg = {"vc_channel_id": None, "stay_24_7": True, "queue": [], "loop": False}
+        cfg = {"vc_channel_id": None, "queue": [], "loop": False}
         save_config(cfg)
         return cfg
 
@@ -44,6 +43,10 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "1355140133661184221"))
 OWNER_ROLE_ID = int(os.getenv("OWNER_ROLE_ID", 1436411629741801482))
 
+# ---------- DEFAULT 24/7 VC ----------
+DEFAULT_VC_ID = 1440192154029916252
+
+# ---------- BOT ----------
 intents = nextcord.Intents.all()
 bot = commands.Bot(command_prefix="/", intents=intents)
 
@@ -57,9 +60,10 @@ def has_owner_role(inter: Interaction) -> bool:
 def require_owner(inter: Interaction):
     return has_owner_role(inter)
 
-# ---------- VC ----------
+# ---------- VC HANDLING ----------
 def get_vc_channel_id():
-    return cfg.get("vc_channel_id")
+    # Fallback to default VC
+    return cfg.get("vc_channel_id") or DEFAULT_VC_ID
 
 def set_vc_channel_id(cid):
     cfg["vc_channel_id"] = cid
@@ -91,7 +95,7 @@ async def play_next(vc: nextcord.VoiceClient):
     if not query.startswith("http"):
         query = f"ytsearch1:{query}"
 
-    # Run yt_dlp in a background thread to prevent blocking
+    # Run yt_dlp in a background thread
     def run_yt():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(query, download=False)
@@ -108,7 +112,7 @@ async def play_next(vc: nextcord.VoiceClient):
 
 async def after_play(vc: nextcord.VoiceClient):
     if cfg["loop"] and cfg["queue"]:
-        # Move the first track to the end if looping queue
+        # Loop queue: move first track to end
         cfg["queue"].append(cfg["queue"].pop(0))
     else:
         if cfg["queue"]:
@@ -157,7 +161,7 @@ class MusicControls(View):
         await inter.response.send_message(f"Loop is now {cfg['loop']}", ephemeral=True)
 
 # ---------- SLASH COMMANDS ----------
-@bot.slash_command(description="Set VC for 24/7 music")
+@bot.slash_command(description="Set VC for 24/7 music (owner only)")
 async def setchannel(inter: Interaction, channel: nextcord.VoiceChannel):
     if not require_owner(inter):
         return await inter.response.send_message("❌ Owner-role required", ephemeral=True)
@@ -178,7 +182,7 @@ async def removevc(inter: Interaction):
     vc = inter.guild.voice_client
     if vc:
         await vc.disconnect()
-    set_vc_channel_id(None)
+    set_vc_channel_id(None)  # fallback to default VC next startup
     await inter.response.send_message("Removed VC", ephemeral=False)
 
 @bot.slash_command(description="Play song (search or link)")
@@ -212,5 +216,16 @@ async def clearqueue(inter: Interaction):
     cfg["queue"].clear()
     await inter.response.send_message("🗑️ Queue cleared", ephemeral=False)
 
-# ---------- RUN ----------
+# ---------- START BOT ----------
+@bot.event
+async def on_ready():
+    print(f"[READY] {bot.user} ({bot.user.id})")
+    # Auto-join default VC if none set
+    vc_id = get_vc_channel_id()
+    if vc_id:
+        channel = bot.get_channel(vc_id)
+        if channel:
+            await get_voice_client(channel.guild, vc_id)
+            print(f"[24/7] Connected to VC {channel.name}")
+
 bot.run(DISCORD_TOKEN)
