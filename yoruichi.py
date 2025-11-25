@@ -1,13 +1,12 @@
 import os
 import json
 import random
-import asyncio
 from typing import Optional
 
 import nextcord
 from nextcord import Interaction
 from nextcord.ext import commands
-from nextcord.ui import View, Button
+from nextcord.ui import View
 import wavelink
 
 # ---------- CONFIG ----------
@@ -30,12 +29,11 @@ cfg = load_config()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "1355140133661184221"))
-OWNER_ROLE_ID = 1436411629741801482
+OWNER_ROLE_ID = int(os.getenv("OWNER_ROLE_ID", 1436411629741801482))
 
 LAVALINK_HOST = os.getenv("LAVALINK_HOST", "lavalink.dev")
 LAVALINK_PORT = int(os.getenv("LAVALINK_PORT", 2333))
 LAVALINK_PASSWORD = os.getenv("LAVALINK_PASSWORD", "youshallnotpass")
-FM_URLS = [u.strip() for u in os.getenv("FM_URLS", "").split(",") if u.strip()]
 
 intents = nextcord.Intents.all()
 bot = commands.Bot(command_prefix="/", intents=intents)
@@ -73,6 +71,16 @@ async def on_ready():
         )
     print("[Wavelink] Node ready.")
 
+    # ------------------ Auto-join 24/7 VC ------------------
+    vc_id = get_vc_channel_id()
+    if vc_id:
+        channel = bot.get_channel(vc_id)
+        if channel:
+            player = await get_player(channel.guild, vc_id)
+            if player and not player.is_connected():
+                await player.connect(channel.id)
+                print(f"[24/7] Reconnected to {channel.name}")
+
 # ---------- PLAYER ----------
 async def get_player(guild: nextcord.Guild, vc_channel_id: Optional[int] = None):
     node = next(iter(wavelink.NodePool.nodes.values()))
@@ -96,17 +104,6 @@ async def get_player(guild: nextcord.Guild, vc_channel_id: Optional[int] = None)
         player.volume = 100
     return player
 
-# ---------- UTILS ----------
-def format_duration(ms: Optional[int]) -> str:
-    if ms is None:
-        return "LIVE"
-    s = ms // 1000
-    m, s = divmod(s, 60)
-    h, m = divmod(m, 60)
-    if h:
-        return f"{h}:{m:02d}:{s:02d}"
-    return f"{m}:{s:02d}"
-
 # ---------- AUTORESPONDER ----------
 @bot.event
 async def on_message(message):
@@ -122,41 +119,41 @@ class MusicControls(View):
         super().__init__(timeout=None)
         self.player = player
 
-    @Button(label="▶ Resume", style=nextcord.ButtonStyle.success)
-    async def resume(self, b: Button, inter: Interaction):
+    @nextcord.ui.button(label="▶ Resume", style=nextcord.ButtonStyle.success)
+    async def resume(self, b: nextcord.ui.Button, inter: Interaction):
         await self.player.resume()
         await inter.response.send_message("▶ Resumed", ephemeral=True)
 
-    @Button(label="⏸ Pause", style=nextcord.ButtonStyle.primary)
-    async def pause(self, b: Button, inter: Interaction):
+    @nextcord.ui.button(label="⏸ Pause", style=nextcord.ButtonStyle.primary)
+    async def pause(self, b: nextcord.ui.Button, inter: Interaction):
         await self.player.pause()
         await inter.response.send_message("⏸ Paused", ephemeral=True)
 
-    @Button(label="⏭ Skip", style=nextcord.ButtonStyle.secondary)
-    async def skip(self, b: Button, inter: Interaction):
+    @nextcord.ui.button(label="⏭ Skip", style=nextcord.ButtonStyle.secondary)
+    async def skip(self, b: nextcord.ui.Button, inter: Interaction):
         await self.player.stop()
         await inter.response.send_message("⏭ Skipped", ephemeral=True)
 
-    @Button(label="⏹ Stop", style=nextcord.ButtonStyle.danger)
-    async def stop(self, b: Button, inter: Interaction):
+    @nextcord.ui.button(label="⏹ Stop", style=nextcord.ButtonStyle.danger)
+    async def stop(self, b: nextcord.ui.Button, inter: Interaction):
         if not has_owner_role(inter):
             await inter.response.send_message("❌ You can't stop", ephemeral=True)
             return
         await self.player.disconnect()
         await inter.response.send_message("Stopped & disconnected", ephemeral=True)
 
-    @Button(label="🔁 Loop Song", style=nextcord.ButtonStyle.success)
-    async def loop_song(self, b: Button, inter: Interaction):
+    @nextcord.ui.button(label="🔁 Loop Song", style=nextcord.ButtonStyle.success)
+    async def loop_song(self, b: nextcord.ui.Button, inter: Interaction):
         self.player.loop = "song"
         await inter.response.send_message("Loop mode: Song 🔁", ephemeral=True)
 
-    @Button(label="🔁🔁 Loop Queue", style=nextcord.ButtonStyle.success)
-    async def loop_queue(self, b: Button, inter: Interaction):
+    @nextcord.ui.button(label="🔁🔁 Loop Queue", style=nextcord.ButtonStyle.success)
+    async def loop_queue(self, b: nextcord.ui.Button, inter: Interaction):
         self.player.loop = "queue"
         await inter.response.send_message("Loop mode: Queue 🔁🔁", ephemeral=True)
 
-    @Button(label="🚫 Disable Loop", style=nextcord.ButtonStyle.secondary)
-    async def loop_off(self, b: Button, inter: Interaction):
+    @nextcord.ui.button(label="🚫 Disable Loop", style=nextcord.ButtonStyle.secondary)
+    async def loop_off(self, b: nextcord.ui.Button, inter: Interaction):
         self.player.loop = False
         await inter.response.send_message("Loop disabled 🚫", ephemeral=True)
 
@@ -234,9 +231,6 @@ async def shuffle(inter: Interaction):
 # ---------- AUTOPLAY NEXT ----------
 @bot.event
 async def on_wavelink_track_end(player: wavelink.Player, track: wavelink.Track, reason):
-    """
-    Autoplay next track from queue. Handles loop modes.
-    """
     if hasattr(player, "loop") and player.loop == "song":
         await player.play(track)
         return
