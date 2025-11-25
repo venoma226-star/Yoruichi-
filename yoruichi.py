@@ -230,30 +230,42 @@ async def shuffle(inter: Interaction):
 
 # ---------- AUTOPLAY NEXT ----------
 @bot.event
-async def on_wavelink_track_end(player: wavelink.Player, track: wavelink.Track, reason):
-    if hasattr(player, "loop") and player.loop == "song":
+async def on_wavelink_track_end(player: wavelink.Player, track, reason):
+    """
+    track is untyped because Wavelink 3.x has no wavelink.Track
+    """
+    # Loop current song
+    if getattr(player, "loop", False) == "song":
         await player.play(track)
         return
 
+    # Play next track in queue
     next_track = None
     if hasattr(player, "queue") and player.queue:
         next_track = player.queue.pop(0)
 
     if next_track:
         await player.play(next_track)
+        # Update embed in VC channel
         try:
             channel = bot.get_channel(player.channel_id)
             if channel:
-                embed = nextcord.Embed(title="Now Playing", description=f"**{next_track.title}**", color=0x00ff88)
+                embed = nextcord.Embed(
+                    title="Now Playing",
+                    description=f"**{next_track.title}**",
+                    color=0x00ff88
+                )
                 embed.set_footer(text="Autoplayed from queue")
                 await channel.send(embed=embed, view=MusicControls(player))
         except Exception:
             pass
-    elif hasattr(player, "loop") and player.loop == "queue":
+    # Loop queue mode
+    elif getattr(player, "loop", False) == "queue":
         if hasattr(player, "queue") and track:
             player.queue.append(track)
             next_track = player.queue.pop(0)
             await player.play(next_track)
+    # Disconnect if nothing left
     else:
         await player.disconnect()
 
