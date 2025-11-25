@@ -62,7 +62,6 @@ def require_owner(inter: Interaction):
 
 # ---------- VC HANDLING ----------
 def get_vc_channel_id():
-    # Fallback to default VC
     return cfg.get("vc_channel_id") or DEFAULT_VC_ID
 
 def set_vc_channel_id(cid):
@@ -75,7 +74,10 @@ async def get_voice_client(guild: nextcord.Guild, channel_id=None):
         return None
     channel = guild.get_channel(channel_id)
     if not channel:
-        return None
+        try:
+            channel = await bot.fetch_channel(channel_id)
+        except:
+            return None
     if guild.voice_client:
         return guild.voice_client
     return await channel.connect()
@@ -95,7 +97,6 @@ async def play_next(vc: nextcord.VoiceClient):
     if not query.startswith("http"):
         query = f"ytsearch1:{query}"
 
-    # Run yt_dlp in a background thread
     def run_yt():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(query, download=False)
@@ -182,7 +183,7 @@ async def removevc(inter: Interaction):
     vc = inter.guild.voice_client
     if vc:
         await vc.disconnect()
-    set_vc_channel_id(None)  # fallback to default VC next startup
+    set_vc_channel_id(None)
     await inter.response.send_message("Removed VC", ephemeral=False)
 
 @bot.slash_command(description="Play song (search or link)")
@@ -217,15 +218,22 @@ async def clearqueue(inter: Interaction):
     await inter.response.send_message("🗑️ Queue cleared", ephemeral=False)
 
 # ---------- START BOT ----------
-@bot.event
-async def on_ready():
-    print(f"[READY] {bot.user} ({bot.user.id})")
-    # Auto-join default VC if none set
+async def auto_join_24_7():
+    await bot.wait_until_ready()
+    await asyncio.sleep(2)
     vc_id = get_vc_channel_id()
     if vc_id:
-        channel = bot.get_channel(vc_id)
-        if channel:
-            await get_voice_client(channel.guild, vc_id)
-            print(f"[24/7] Connected to VC {channel.name}")
+        for guild in bot.guilds:
+            channel = guild.get_channel(vc_id)
+            if not channel:
+                try:
+                    channel = await bot.fetch_channel(vc_id)
+                except:
+                    continue
+            if channel and isinstance(channel, nextcord.VoiceChannel):
+                if not guild.voice_client:
+                    await get_voice_client(guild, vc_id)
+                    print(f"[24/7] Connected to VC {channel.name}")
 
+bot.loop.create_task(auto_join_24_7())
 bot.run(DISCORD_TOKEN)
