@@ -4,6 +4,7 @@ import nextcord
 from nextcord.ext import commands
 from nextcord import Interaction
 from flask import Flask
+import asyncio
 
 # ---------- FLASK KEEP-ALIVE ----------
 app = Flask("")
@@ -27,44 +28,65 @@ bot = commands.Bot(command_prefix="/", intents=intents)
 # IDs allowed to use /setforever
 ALLOWED_USERS = {1438813958848122924, 1421553185943978109, 1284809746775408682}
 
-# ---------- SYNC SLASH COMMANDS ----------
-@bot.event
-async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
-    try:
-        synced = await bot.sync_all_application_commands()
-        print(f"✅ Synced {len(synced)} slash command(s).")
-    except Exception as e:
-        print(f"⚠️ Error syncing commands: {e}")
+# ---------- SONG LIST ----------
+SONG_FOLDER = "songs"
+playlist = [f"{SONG_FOLDER}/{f}" for f in os.listdir(SONG_FOLDER) if f.endswith(".mp3")]
+
+current_song_index = 0
+
+
+# ---------- MUSIC PLAYER ----------
+async def play_loop(vc):
+    global current_song_index
+
+    while True:
+        if not vc.is_connected():
+            break
+
+        song = playlist[current_song_index]
+
+        vc.play(
+            nextcord.FFmpegPCMAudio(song),
+            after=lambda e: print(f"Finished: {song}, error: {e}")
+        )
+
+        # Wait until song finishes
+        while vc.is_playing():
+            await asyncio.sleep(1)
+
+        # Next track
+        current_song_index = (current_song_index + 1) % len(playlist)
+
 
 # ---------- SLASH COMMAND ----------
-@bot.slash_command(name="setforever", description="Makes the bot join your voice channel.")
+@bot.slash_command(name="setforever", description="Makes the bot join your voice channel and start 24/7 music.")
 async def set_forever(inter: Interaction):
 
-    # permission check
     if inter.user.id not in ALLOWED_USERS:
         await inter.response.send_message("❌ You are not allowed to use this command.", ephemeral=True)
         return
 
-    # check if user is in a VC
     if inter.user.voice is None:
-        await inter.response.send_message("❌ You must be **in a voice channel** first.", ephemeral=True)
+        await inter.response.send_message("❌ Join a voice channel first.", ephemeral=True)
         return
 
     channel = inter.user.voice.channel
 
-    # connect the bot
     try:
-        await channel.connect()
-        await inter.response.send_message(f"✅ Joined **{channel.name}** and staying forever!")
+        vc = await channel.connect()
     except:
-        # if already connected, move it instead
-        voice_client = inter.guild.voice_client
-        if voice_client:
-            await voice_client.move_to(channel)
-            await inter.response.send_message(f"🔁 Moved to **{channel.name}** and staying there!")
+        vc = inter.guild.voice_client
+        if vc:
+            await vc.move_to(channel)
         else:
-            await inter.response.send_message("⚠️ Something went wrong.", ephemeral=True)
+            await inter.response.send_message("⚠️ Error joining VC.", ephemeral=True)
+            return
+
+    await inter.response.send_message(f"🎵 Connected to **{channel.name}** — starting 24/7 music autoplay!")
+
+    # Start autoplay loop
+    bot.loop.create_task(play_loop(vc))
+
 
 # ---------- AUTORESPONDER ----------
 @bot.event
