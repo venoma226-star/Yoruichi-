@@ -81,48 +81,50 @@ async def autoplay_loop(vc):
 # -------------------------
 @bot.slash_command(name="join", description="Bot joins VC & plays music")
 async def join(interaction: Interaction):
-    await interaction.response.defer()
     roles = [r.id for r in interaction.user.roles]
     if ALLOWED_ROLE not in roles:
-        return await interaction.followup.send("❌ You cannot use this command.", ephemeral=True)
+        return await interaction.response.send_message("❌ You cannot use this command.", ephemeral=True)
 
     if interaction.user.voice is None:
-        return await interaction.followup.send("❌ You must be in a voice channel.", ephemeral=True)
+        return await interaction.response.send_message("❌ You must be in a voice channel.", ephemeral=True)
+
+    # Send immediate response
+    await interaction.response.send_message("🎵 Joining VC and starting music...", ephemeral=False)
 
     if interaction.guild.voice_client:
         await interaction.guild.voice_client.disconnect()
 
     channel = interaction.user.voice.channel
     vc = await channel.connect()
-    await interaction.followup.send(f"Joined **{channel}**. Starting music 🎶")
+
+    # Start loop asynchronously
     bot.loop.create_task(autoplay_loop(vc))
 
 @bot.slash_command(name="leave", description="Bot disconnects")
 async def leave(interaction: Interaction):
-    await interaction.response.defer()
     roles = [r.id for r in interaction.user.roles]
     if ALLOWED_ROLE not in roles:
-        return await interaction.followup.send("❌ No permission.", ephemeral=True)
+        return await interaction.response.send_message("❌ No permission.", ephemeral=True)
 
-    if interaction.guild.voice_client:
-        await interaction.guild.voice_client.disconnect()
-        await interaction.followup.send("Disconnected.")
+    vc = interaction.guild.voice_client
+    if vc:
+        await vc.disconnect()
+        await interaction.response.send_message("Disconnected.")
     else:
-        await interaction.followup.send("❌ Not in a VC.")
+        await interaction.response.send_message("❌ Not in a VC.", ephemeral=True)
 
 @bot.slash_command(name="skip", description="Skip current track")
 async def skip(interaction: Interaction):
-    await interaction.response.defer()
     roles = [r.id for r in interaction.user.roles]
     if ALLOWED_ROLE not in roles:
-        return await interaction.followup.send("❌ No permission.", ephemeral=True)
+        return await interaction.response.send_message("❌ No permission.", ephemeral=True)
 
     vc = interaction.guild.voice_client
     if vc and vc.is_playing():
         vc.stop()
-        await interaction.followup.send("⏭ Skipped current track")
+        await interaction.response.send_message("⏭ Skipped current track")
     else:
-        await interaction.followup.send("❌ Nothing is playing", ephemeral=True)
+        await interaction.response.send_message("❌ Nothing is playing", ephemeral=True)
 
 # -------------------------
 # AUTORESPONDER TO HANOK PINGS ONLY
