@@ -27,6 +27,16 @@ bot = commands.Bot(command_prefix="/", intents=intents)
 # IDs allowed to use /setforever
 ALLOWED_USERS = {1438813958848122924, 1421553185943978109, 1284809746775408682}
 
+# ---------- SYNC SLASH COMMANDS ----------
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user}")
+    try:
+        synced = await bot.sync_all_application_commands()
+        print(f"✅ Synced {len(synced)} slash command(s).")
+    except Exception as e:
+        print(f"⚠️ Error syncing commands: {e}")
+
 # ---------- SLASH COMMAND ----------
 @bot.slash_command(name="setforever", description="Makes the bot join your voice channel.")
 async def set_forever(inter: Interaction):
