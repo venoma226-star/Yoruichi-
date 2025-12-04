@@ -139,6 +139,23 @@ async def leave(interaction: Interaction):
     else:
         await interaction.followup.send("❌ Not in a VC.")
 
+# -------------------------
+# AUTORESPONDER TO HANOK PINGS
+# -------------------------
+@bot.event
+async def on_message(message):
+    # Ignore messages from bots
+    if message.author.bot:
+        return
+
+    # Respond only if the specific user is actually mentioned (pinged)
+    for user in message.mentions:
+        if user.id == 1284809746775408682:  # Hanok's ID
+            await message.channel.send("😡 Don't try to flirt with him, he is my man 😘🥰")
+            break
+
+    # Ensure commands still work
+    await bot.process_commands(message)
 
 @bot.event
 async def on_ready():
