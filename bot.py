@@ -3,10 +3,8 @@ import nextcord
 from nextcord.ext import commands
 from nextcord import Interaction
 import asyncio
-import yt_dlp
 from flask import Flask
 import threading
-import functools
 
 # -------------------------
 # FLASK KEEP-ALIVE SERVER
@@ -31,81 +29,64 @@ bot = commands.Bot(intents=intents)
 
 ALLOWED_ROLE = 1436411629741801482
 
-ytdl_opts = {
-    "format": "bestaudio/best",
-    "quiet": True,
-    "noplaylist": True,
-    "extractor_args": {"youtube": {"player_client": ["web"]}},
-    "nocheckcertificate": True,
-}
-ytdl = yt_dlp.YoutubeDL(ytdl_opts)
-
 ffmpeg_options = {
     "options": "-vn",
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
 }
 
+# -------------------------
+# PLAYLIST WITH DIRECT MP3 LINKS
+# -------------------------
 PLAYLIST = [
-    "https://youtu.be/9dzub7uXWl4"
+    "https://cdn.discordapp.com/attachments/1440192154029916252/1446004021612642324/Adore_-_Did_I_Tell_U_That_I_Miss_U_SkySound.cc.mp3",
+    "https://cdn.discordapp.com/attachments/1440192154029916252/1446004022493577266/Don_Toilver_-_No_pole_mp3.pm.mp3",
+    "https://cdn.discordapp.com/attachments/1440192154029916252/1446004023013544016/Golden-Brown-The-Stranglers-Slowed-Reverb-1.mp3",
+    "https://cdn.discordapp.com/attachments/1440192154029916252/1446004023412133888/-_u_weren_t_here_I_really_miss_you_mp3.pm.mp3",
+    "https://cdn.discordapp.com/attachments/1440192154029916252/1446004024267509822/soundcloudaud.com_Rukia_Kuchiki_Bankai_x_U_Werent_Here_I_Really_Miss_U_best_part_looped_SwoleRuto_Edit.mp3",
+    "https://cdn.discordapp.com/attachments/1440192154029916252/1446004024670290030/wiv_-_i_love_u._slowed_SkySound.cc.mp3"
 ]
 
 current_index = 0
 
+def get_source(url):
+    return nextcord.FFmpegPCMAudio(url, **ffmpeg_options)
 
-def extract_info(url):
-    info = ytdl.extract_info(url, download=False)
-    return info["url"]
-
-
-async def get_source_async(url):
-    loop = asyncio.get_event_loop()
-    audio_url = await loop.run_in_executor(None, functools.partial(extract_info, url))
-    return nextcord.FFmpegPCMAudio(audio_url, **ffmpeg_options)
-
-
+# -------------------------
+# AUTO-LOOP PLAYER
+# -------------------------
 async def autoplay_loop(vc):
     global current_index
-    
-    await asyncio.sleep(2)
+    await asyncio.sleep(0.5)  # tiny delay to ensure VC is connected
 
     while True:
         if not vc.is_connected():
             print("Voice client disconnected, stopping autoplay")
             break
-        
+
         try:
-            print(f"Fetching audio for: {PLAYLIST[current_index]}")
-            source = await get_source_async(PLAYLIST[current_index])
-            
-            if not vc.is_connected():
-                print("Disconnected while fetching, stopping")
-                break
-            
+            source = get_source(PLAYLIST[current_index])
             vc.play(source)
-            print("Playing:", PLAYLIST[current_index])
+            print(f"Playing: {PLAYLIST[current_index]}")
 
             while vc.is_playing() or vc.is_paused():
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
                 if not vc.is_connected():
                     break
 
             current_index = (current_index + 1) % len(PLAYLIST)
-            
+
         except Exception as e:
             print(f"Error playing audio: {e}")
             import traceback
             traceback.print_exc()
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
 
-
-@bot.slash_command(
-    name="join",
-    description="Bot joins VC & plays music."
-)
+# -------------------------
+# SLASH COMMANDS
+# -------------------------
+@bot.slash_command(name="join", description="Bot joins VC & plays music")
 async def join(interaction: Interaction):
-
     await interaction.response.defer()
-
     roles = [r.id for r in interaction.user.roles]
     if ALLOWED_ROLE not in roles:
         return await interaction.followup.send("❌ You cannot use this command.", ephemeral=True)
@@ -118,17 +99,12 @@ async def join(interaction: Interaction):
 
     channel = interaction.user.voice.channel
     vc = await channel.connect()
-
     await interaction.followup.send(f"Joined **{channel}**. Starting music 🎶")
-
     bot.loop.create_task(autoplay_loop(vc))
 
-
-@bot.slash_command(name="leave", description="Bot disconnects.")
+@bot.slash_command(name="leave", description="Bot disconnects")
 async def leave(interaction: Interaction):
-
     await interaction.response.defer()
-
     roles = [r.id for r in interaction.user.roles]
     if ALLOWED_ROLE not in roles:
         return await interaction.followup.send("❌ No permission.", ephemeral=True)
@@ -139,8 +115,22 @@ async def leave(interaction: Interaction):
     else:
         await interaction.followup.send("❌ Not in a VC.")
 
+@bot.slash_command(name="skip", description="Skip current track")
+async def skip(interaction: Interaction):
+    await interaction.response.defer()
+    roles = [r.id for r in interaction.user.roles]
+    if ALLOWED_ROLE not in roles:
+        return await interaction.followup.send("❌ No permission.", ephemeral=True)
+
+    vc = interaction.guild.voice_client
+    if vc and vc.is_playing():
+        vc.stop()
+        await interaction.followup.send("⏭ Skipped current track")
+    else:
+        await interaction.followup.send("❌ Nothing is playing", ephemeral=True)
+
 # -------------------------
-# AUTORESPONDER TO HANOK PINGS
+# AUTORESPONDER TO HANOK PINGS ONLY
 # -------------------------
 @bot.event
 async def on_message(message):
@@ -148,7 +138,12 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # Respond only if the specific user is actually mentioned (pinged)
+    # Ignore replies
+    if message.reference is not None:
+        await bot.process_commands(message)
+        return
+
+    # Respond only if the specific user is pinged
     for user in message.mentions:
         if user.id == 1284809746775408682:  # Hanok's ID
             await message.channel.send("😡 Don't try to flirt with him, he is my man 😘🥰")
@@ -157,9 +152,14 @@ async def on_message(message):
     # Ensure commands still work
     await bot.process_commands(message)
 
+# -------------------------
+# READY EVENT
+# -------------------------
 @bot.event
 async def on_ready():
     print(f"Bot is ready! Logged in as {bot.user}")
 
-
+# -------------------------
+# RUN BOT
+# -------------------------
 bot.run(os.getenv("DISCORD_TOKEN"))
