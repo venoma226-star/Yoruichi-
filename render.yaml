@@ -2,8 +2,8 @@ services:
   - type: web
     name: music-bot
     env: python
-    plan: free  # change to paid if you want always-on
-    buildCommand: apt-get update && apt-get install -y ffmpeg && pip install -r requirements.txt
+    plan: free  # change to paid for always-on
+    buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     envVars:
       - key: DISCORD_TOKEN
