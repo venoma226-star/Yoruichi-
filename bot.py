@@ -1,88 +1,108 @@
-import os
-import threading
-import random
 import nextcord
 from nextcord.ext import commands
+import asyncio
+import yt_dlp
 from flask import Flask
+import threading
 
-# ---------- FLASK KEEP-ALIVE ----------
+# -------------------------
+# FLASK KEEP-ALIVE SERVER
+# -------------------------
 app = Flask("")
 
 @app.route("/")
 def home():
-    return "Bot is alive!"
+    return "Bot is running!"
 
 def run_flask():
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+    app.run(host="0.0.0.0", port=8080)
 
+# Start Flask server
 threading.Thread(target=run_flask).start()
 
-# ---------- BOT SETUP ----------
-intents = nextcord.Intents.all()
-bot = commands.Bot(command_prefix="/", intents=intents)
+# -------------------------
+# DISCORD BOT SETUP
+# -------------------------
+intents = nextcord.Intents.default()
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-AUTHORIZED = {1438813958848122924, 1421553185943978109, 1284809746775408682}
+ytdl_opts = {
+    "format": "bestaudio/best",
+    "quiet": True,
+    "noplaylist": True
+}
+ytdl = yt_dlp.YoutubeDL(ytdl_opts)
 
-# ---------- MUSIC LOOP ----------
-songs_folder = "songs"
+ffmpeg_options = {
+    "options": "-vn"
+}
 
-def get_song_list():
-    try:
-        return [f"songs/{f}" for f in os.listdir(songs_folder) if f.endswith(".mp3")]
-    except:
-        return []
+# -------------------------
+# PLAYLIST WITH YOUR SONG
+# -------------------------
+PLAYLIST = [
+    "https://youtu.be/9dzub7uXWl4"
+]
 
-async def play_loop(voice_client):
+current_index = 0
+voice_client = None
+
+
+# -------------------------
+# GET AUDIO SOURCE
+# -------------------------
+def get_source(url):
+    info = ytdl.extract_info(url, download=False)
+    return nextcord.FFmpegPCMAudio(info["url"], **ffmpeg_options)
+
+
+# -------------------------
+# AUTO-LOOP PLAYER
+# -------------------------
+async def autoplay_loop(vc):
+    global current_index
+
     while True:
-        songs = get_song_list()
-        if not songs:
-            return
-        song = random.choice(songs)
-        voice_client.play(
-            nextcord.FFmpegPCMAudio(song),
-            after=lambda e: None
-        )
-        while voice_client.is_playing():
-            await nextcord.utils.sleep_until(nextcord.utils.utcnow() + nextcord.utils.timedelta(seconds=1))
+        source = get_source(PLAYLIST[current_index])
+        vc.play(source)
 
-# ---------- SLASH COMMAND ----------
-@bot.slash_command(name="setforever", description="Bot joins your VC & plays music forever")
-async def setforever(interaction: nextcord.Interaction):
+        # Wait until track finishes
+        while vc.is_playing() or vc.is_paused():
+            await asyncio.sleep(1)
 
-    # Permission check for 3 IDs
-    if interaction.user.id not in AUTHORIZED:
-        return await interaction.response.send_message("❌ You are not allowed to use this command.", ephemeral=True)
+        current_index = (current_index + 1) % len(PLAYLIST)
 
-    # Must be in VC
-    if interaction.user.voice is None:
-        return await interaction.response.send_message("❌ Join a voice channel first.", ephemeral=True)
 
-    channel = interaction.user.voice.channel
+# -------------------------
+# JOIN COMMAND
+# -------------------------
+@bot.command()
+async def join(ctx):
+    global voice_client
 
-    # Connect or move
-    voice = nextcord.utils.get(bot.voice_clients, guild=interaction.guild)
+    if ctx.author.voice is None:
+        return await ctx.send("You must be in a voice channel.")
 
-    if not voice:
-        voice = await channel.connect()
+    channel = ctx.author.voice.channel
+    voice_client = await channel.connect()
+    await ctx.send(f"Joined **{channel}**. Starting auto music loop 🎵")
+
+    bot.loop.create_task(autoplay_loop(voice_client))
+
+
+# -------------------------
+# LEAVE COMMAND
+# -------------------------
+@bot.command()
+async def leave(ctx):
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        await ctx.send("Disconnected.")
     else:
-        await voice.move_to(channel)
+        await ctx.send("Not in a voice channel.")
+        
 
-    await interaction.response.send_message(f"✅ Joined **{channel.name}** and will play music 24/7.")
-
-    # Start loop
-    bot.loop.create_task(play_loop(voice))
-
-# ---------- AUTORESPONDER ----------
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    if "<@1284809746775408682>" in message.content:
-        await message.channel.send("😡 Don't try to flirt with him, he is my man 😘🥰")
-
-    await bot.process_commands(message)
-
-# ---------- RUN ----------
-TOKEN = os.getenv("DISCORD_TOKEN")
-bot.run(TOKEN)
+# -------------------------
+# RUN BOT
+# -------------------------
+bot.run("YOUR_BOT_TOKEN")
