@@ -1,10 +1,9 @@
 import os
 import threading
+import random
 import nextcord
 from nextcord.ext import commands
-from nextcord import Interaction
 from flask import Flask
-import asyncio
 
 # ---------- FLASK KEEP-ALIVE ----------
 app = Flask("")
@@ -14,79 +13,64 @@ def home():
     return "Bot is alive!"
 
 def run_flask():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
 
 threading.Thread(target=run_flask).start()
 
-# ---------- ENV ----------
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-
-# ---------- BOT ----------
+# ---------- BOT SETUP ----------
 intents = nextcord.Intents.all()
 bot = commands.Bot(command_prefix="/", intents=intents)
 
-# IDs allowed to use /setforever
-ALLOWED_USERS = {1438813958848122924, 1421553185943978109, 1284809746775408682}
+AUTHORIZED = {1438813958848122924, 1421553185943978109, 1284809746775408682}
 
-# ---------- SONG LIST ----------
-SONG_FOLDER = "songs"
-playlist = [f"{SONG_FOLDER}/{f}" for f in os.listdir(SONG_FOLDER) if f.endswith(".mp3")]
+# ---------- MUSIC LOOP ----------
+songs_folder = "songs"
 
-current_song_index = 0
+def get_song_list():
+    try:
+        return [f"songs/{f}" for f in os.listdir(songs_folder) if f.endswith(".mp3")]
+    except:
+        return []
 
-
-# ---------- MUSIC PLAYER ----------
-async def play_loop(vc):
-    global current_song_index
-
+async def play_loop(voice_client):
     while True:
-        if not vc.is_connected():
-            break
-
-        song = playlist[current_song_index]
-
-        vc.play(
+        songs = get_song_list()
+        if not songs:
+            return
+        song = random.choice(songs)
+        voice_client.play(
             nextcord.FFmpegPCMAudio(song),
-            after=lambda e: print(f"Finished: {song}, error: {e}")
+            after=lambda e: None
         )
-
-        # Wait until song finishes
-        while vc.is_playing():
-            await asyncio.sleep(1)
-
-        # Next track
-        current_song_index = (current_song_index + 1) % len(playlist)
-
+        while voice_client.is_playing():
+            await nextcord.utils.sleep_until(nextcord.utils.utcnow() + nextcord.utils.timedelta(seconds=1))
 
 # ---------- SLASH COMMAND ----------
-@bot.slash_command(name="setforever", description="Makes the bot join your voice channel and start 24/7 music.")
-async def set_forever(inter: Interaction):
+@bot.slash_command(name="setforever", description="Bot joins your VC & plays music forever")
+async def setforever(interaction: nextcord.Interaction):
 
-    if inter.user.id not in ALLOWED_USERS:
-        await inter.response.send_message("❌ You are not allowed to use this command.", ephemeral=True)
-        return
+    # Permission check for 3 IDs
+    if interaction.user.id not in AUTHORIZED:
+        return await interaction.response.send_message("❌ You are not allowed to use this command.", ephemeral=True)
 
-    if inter.user.voice is None:
-        await inter.response.send_message("❌ Join a voice channel first.", ephemeral=True)
-        return
+    # Must be in VC
+    if interaction.user.voice is None:
+        return await interaction.response.send_message("❌ Join a voice channel first.", ephemeral=True)
 
-    channel = inter.user.voice.channel
+    channel = interaction.user.voice.channel
 
-    try:
-        vc = await channel.connect()
-    except:
-        vc = inter.guild.voice_client
-        if vc:
-            await vc.move_to(channel)
-        else:
-            await inter.response.send_message("⚠️ Error joining VC.", ephemeral=True)
-            return
+    # Connect or move
+    voice = nextcord.utils.get(bot.voice_clients, guild=interaction.guild)
 
-    await inter.response.send_message(f"🎵 Connected to **{channel.name}** — starting 24/7 music autoplay!")
+    if not voice:
+        voice = await channel.connect()
+    else:
+        await voice.move_to(channel)
 
-    # Start autoplay loop
-    bot.loop.create_task(play_loop(vc))
+    await interaction.response.send_message(f"✅ Joined **{channel.name}** and will play music 24/7.")
 
+    # Start loop
+    bot.loop.create_task(play_loop(voice))
 
 # ---------- AUTORESPONDER ----------
 @bot.event
@@ -99,5 +83,6 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# ---------- START BOT ----------
-bot.run(DISCORD_TOKEN)
+# ---------- RUN ----------
+TOKEN = os.getenv("DISCORD_TOKEN")
+bot.run(TOKEN)
