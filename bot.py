@@ -30,8 +30,8 @@ bot = commands.Bot(intents=intents)
 ALLOWED_ROLE = 1436411629741801482
 
 ffmpeg_options = {
-    "options": "-vn",
-    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re",
+    "options": "-vn"
 }
 
 # -------------------------
@@ -48,38 +48,33 @@ PLAYLIST = [
 
 current_index = 0
 
-def get_source(url):
-    return nextcord.FFmpegPCMAudio(url, **ffmpeg_options)
-
 # -------------------------
 # AUTO-LOOP PLAYER
 # -------------------------
 async def autoplay_loop(vc):
     global current_index
-    await asyncio.sleep(0.5)  # tiny delay to ensure VC is connected
 
-    while True:
-        if not vc.is_connected():
-            print("Voice client disconnected, stopping autoplay")
-            break
+    await asyncio.sleep(0.5)  # small delay to stabilize VC
 
+    while vc.is_connected():
         try:
-            source = get_source(PLAYLIST[current_index])
-            vc.play(source)
+            source = nextcord.FFmpegPCMAudio(PLAYLIST[current_index], **ffmpeg_options)
+            
+            play_done = asyncio.Event()
+            def after_play(error):
+                if error:
+                    print(f"Error in after_play: {error}")
+                bot.loop.call_soon_threadsafe(play_done.set)
+
+            vc.play(source, after=after_play)
             print(f"Playing: {PLAYLIST[current_index]}")
 
-            while vc.is_playing() or vc.is_paused():
-                await asyncio.sleep(0.5)
-                if not vc.is_connected():
-                    break
-
+            await play_done.wait()  # wait for track to finish
             current_index = (current_index + 1) % len(PLAYLIST)
 
         except Exception as e:
-            print(f"Error playing audio: {e}")
-            import traceback
-            traceback.print_exc()
-            await asyncio.sleep(2)
+            print(f"Error in autoplay_loop: {e}")
+            await asyncio.sleep(1)
 
 # -------------------------
 # SLASH COMMANDS
@@ -134,7 +129,6 @@ async def skip(interaction: Interaction):
 # -------------------------
 @bot.event
 async def on_message(message):
-    # Ignore messages from bots
     if message.author.bot:
         return
 
@@ -143,13 +137,12 @@ async def on_message(message):
         await bot.process_commands(message)
         return
 
-    # Respond only if the specific user is pinged
+    # Respond only if Hanok is pinged
     for user in message.mentions:
         if user.id == 1284809746775408682:  # Hanok's ID
             await message.channel.send("😡 Don't try to flirt with him, he is my man 😘🥰")
             break
 
-    # Ensure commands still work
     await bot.process_commands(message)
 
 # -------------------------
