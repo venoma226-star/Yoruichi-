@@ -1,5 +1,7 @@
+import os
 import nextcord
 from nextcord.ext import commands
+from nextcord import Interaction, SlashOption
 import asyncio
 import yt_dlp
 from flask import Flask
@@ -17,14 +19,16 @@ def home():
 def run_flask():
     app.run(host="0.0.0.0", port=8080)
 
-# Start Flask server
 threading.Thread(target=run_flask).start()
 
 # -------------------------
 # DISCORD BOT SETUP
 # -------------------------
-intents = nextcord.Intents.default()
-bot = commands.Bot(command_prefix="!", intents=intents)
+intents = nextcord.Intents.all()
+bot = commands.Bot(intents=intents)
+
+GUILD_ID = None  # Auto-global slash cmd – works everywhere
+ALLOWED_ROLE = 1436411629741801482  # your role ID
 
 ytdl_opts = {
     "format": "bestaudio/best",
@@ -33,9 +37,7 @@ ytdl_opts = {
 }
 ytdl = yt_dlp.YoutubeDL(ytdl_opts)
 
-ffmpeg_options = {
-    "options": "-vn"
-}
+ffmpeg_options = {"options": "-vn"}
 
 # -------------------------
 # PLAYLIST WITH YOUR SONG
@@ -45,7 +47,6 @@ PLAYLIST = [
 ]
 
 current_index = 0
-voice_client = None
 
 
 # -------------------------
@@ -66,7 +67,6 @@ async def autoplay_loop(vc):
         source = get_source(PLAYLIST[current_index])
         vc.play(source)
 
-        # Wait until track finishes
         while vc.is_playing() or vc.is_paused():
             await asyncio.sleep(1)
 
@@ -74,35 +74,64 @@ async def autoplay_loop(vc):
 
 
 # -------------------------
-# JOIN COMMAND
+# SLASH COMMAND: JOIN
 # -------------------------
-@bot.command()
-async def join(ctx):
-    global voice_client
+@bot.slash_command(
+    name="join",
+    description="Bot joins VC & starts auto music loop."
+)
+async def join(interaction: Interaction):
 
-    if ctx.author.voice is None:
-        return await ctx.send("You must be in a voice channel.")
+    # Check role
+    roles = [r.id for r in interaction.user.roles]
+    if ALLOWED_ROLE not in roles:
+        return await interaction.response.send_message(
+            "❌ You do not have permission to use this command.",
+            ephemeral=True
+        )
 
-    channel = ctx.author.voice.channel
-    voice_client = await channel.connect()
-    await ctx.send(f"Joined **{channel}**. Starting auto music loop 🎵")
+    # Must be in VC
+    if interaction.user.voice is None:
+        return await interaction.response.send_message(
+            "❌ You must be in a voice channel.",
+            ephemeral=True
+        )
 
-    bot.loop.create_task(autoplay_loop(voice_client))
+    channel = interaction.user.voice.channel
+    vc = await channel.connect()
+
+    await interaction.response.send_message(
+        f"Joined **{channel}**. Starting music loop 🎵"
+    )
+
+    bot.loop.create_task(autoplay_loop(vc))
 
 
 # -------------------------
-# LEAVE COMMAND
+# SLASH COMMAND: LEAVE
 # -------------------------
-@bot.command()
-async def leave(ctx):
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
-        await ctx.send("Disconnected.")
+@bot.slash_command(
+    name="leave",
+    description="Bot disconnects from VC."
+)
+async def leave(interaction: Interaction):
+
+    # Role check
+    roles = [r.id for r in interaction.user.roles]
+    if ALLOWED_ROLE not in roles:
+        return await interaction.response.send_message(
+            "❌ You cannot use this command.",
+            ephemeral=True
+        )
+
+    if interaction.guild.voice_client:
+        await interaction.guild.voice_client.disconnect()
+        await interaction.response.send_message("Disconnected.")
     else:
-        await ctx.send("Not in a voice channel.")
-        
+        await interaction.response.send_message("❌ Bot is not in a VC.")
+
+
 # -------------------------
 # RUN BOT
 # -------------------------
-import os
 bot.run(os.getenv("DISCORD_TOKEN"))
