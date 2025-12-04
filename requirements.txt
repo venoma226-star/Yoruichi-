@@ -1,4 +1,5 @@
 nextcord
+yt-dlp
+pynacl
 flask
-PyNaCl
 ffmpeg-python
