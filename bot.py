@@ -101,8 +101,8 @@ async def leave(ctx):
     else:
         await ctx.send("Not in a voice channel.")
         
-
 # -------------------------
 # RUN BOT
 # -------------------------
-bot.run("YOUR_BOT_TOKEN")
+import os
+bot.run(os.getenv("DISCORD_TOKEN"))
